@@ -111,7 +111,21 @@ let main () =
       ) (OptParse.Opt.get Options.coinst)
     end else []
   in
-  let pp = CudfAdd.pp from_cudf in
+  let pp =
+  if OptParse.Opt.is_set Options.realversionfield then
+    let from_cudf_real (n,v) =
+      let rvf = OptParse.Opt.get Options.realversionfield in
+      let get_pkg (name,version) =
+	Cudf.lookup_package universe (name,version)
+      in 
+      try
+	let rv = CudfAdd.get_property rvf (get_pkg (n,v)) in
+	(n,rv)
+      with Not_found -> from_cudf (n,v)
+    in 
+    CudfAdd.pp from_cudf_real
+  else 
+    CudfAdd.pp from_cudf in
 
   info "Solving..." ;
   let failure = OptParse.Opt.get Options.failure in
