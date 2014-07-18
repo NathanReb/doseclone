@@ -111,6 +111,7 @@ let main () =
       ) (OptParse.Opt.get Options.coinst)
     end else []
   in
+
   let pp =
   if OptParse.Opt.is_set Options.realversionfield then
     let rvtbl = Hashtbl.create (universe_size * 4) in
@@ -145,8 +146,6 @@ let main () =
 		  if filetype = `Cudf then
 		    add_unav_packages_from filename;
 		  add_unav_packages tl
-		    
-
     in
     add_unav_packages fg;
     let from_cudf_real (n,v) =
