@@ -39,7 +39,7 @@ module Options = struct
   let coinst = Boilerplate.vpkglist_option ();;
   add options ~long_name:"coinst" ~help:"Check if these packages are coinstallable" coinst;;
 
-  let realversionfield = StdOpt.str_option ~default:"version" ();;
+  let realversionfield = StdOpt.str_option ();;
   add options ~long_name:"real-version-field" ~help:"Specify field where the original version of a package is stored in the CUDF file" realversionfield;;
 
 end
@@ -155,7 +155,7 @@ let main () =
       with Not_found -> from_cudf (n,v)
     in 
     CudfAdd.pp from_cudf_real
-  else 
+  else
     CudfAdd.pp from_cudf
   in
 
