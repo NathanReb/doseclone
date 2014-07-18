@@ -113,19 +113,52 @@ let main () =
   in
   let pp =
   if OptParse.Opt.is_set Options.realversionfield then
-    let from_cudf_real (n,v) =
-      let rvf = OptParse.Opt.get Options.realversionfield in
-      let get_pkg (name,version) =
-	Cudf.lookup_package universe (name,version)
-      in 
+    let rvtbl = Hashtbl.create (universe_size * 4) in
+    let rvf = OptParse.Opt.get Options.realversionfield in
+    let rvtbl_store pkg = 
+      Hashtbl.add 
+	rvtbl 
+	((CudfAdd.get_property "package" pkg),
+	 int_of_string (CudfAdd.get_property "version" pkg)) 
+	(CudfAdd.get_property rvf pkg)
+    in 
+    Cudf.iter_packages rvtbl_store universe;
+    let add_unav_packages_from filename = 
+      let ic = open_in filename in
       try
-	let rv = CudfAdd.get_property rvf (get_pkg (n,v)) in
+	while true do
+	  let line = input_line ic in
+	  try
+	    Scanf.sscanf line "#v2v:%s@:%d=%s"
+	      (fun opam_name cudf_version opam_version ->
+		let cudf_name = CudfAdd.encode opam_name in
+		if not (Hashtbl.mem rvtbl (cudf_name, cudf_version)) then
+		  Hashtbl.add rvtbl (cudf_name, cudf_version) opam_version)
+	  with Scanf.Scan_failure _ | End_of_file -> ()
+	done
+      with End_of_file ->
+	close_in ic
+    in
+    let rec add_unav_packages = function 
+      | [] -> ()
+      | hd::tl -> let (filetype,(_,_,_,_,filename),_) = Input.parse_uri hd in
+		  if filetype = `Cudf then
+		    add_unav_packages_from filename;
+		  add_unav_packages tl
+		    
+
+    in
+    add_unav_packages fg;
+    let from_cudf_real (n,v) =
+      try
+	let rv = Hashtbl.find rvtbl (n,v) in
 	(n,rv)
       with Not_found -> from_cudf (n,v)
     in 
     CudfAdd.pp from_cudf_real
   else 
-    CudfAdd.pp from_cudf in
+    CudfAdd.pp from_cudf
+  in
 
   info "Solving..." ;
   let failure = OptParse.Opt.get Options.failure in
