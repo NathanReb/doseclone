@@ -24,6 +24,13 @@ type reason =
   (** Conflict (a,b,vpkg) means that the package [a] is in conflict
       with package [b] because of vpkg *)
 
+type node = Cudf.package list
+
+type reducedReason =
+  | RDependency of (node * Cudf_types.vpkg list * node list)
+  | RMissing of (node * Cudf_types.vpkg list)
+  | RConflict of (node * node * Cudf_types.vpkg)
+
 (** The request provided to the solver *)
 type request =
   |Package of Cudf.package
@@ -117,14 +124,21 @@ val fprintf_human :
   ?pp:pp ->
   ?prefix:string -> Format.formatter -> diagnosis -> unit
 
+val add_missing : reason list-> reason -> reason list
+
+val add_missings : reason list -> reason list
+
 val fprintf :
   ?pp:pp ->
   ?failure:bool ->
   ?success:bool ->
-  ?explain:bool -> ?minimal:bool -> Format.formatter -> diagnosis -> unit
+  ?explain:bool -> ?minimal:bool -> ?addmiss:bool -> Format.formatter -> diagnosis -> unit
 
 val printf :
   ?pp:pp ->
   ?failure:bool -> ?success:bool -> ?explain:bool -> diagnosis -> unit
 
 
+val to_reduced_reason : reason -> reducedReason
+
+val to_reduced_reasons : reason list -> reducedReason list

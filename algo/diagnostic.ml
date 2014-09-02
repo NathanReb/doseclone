@@ -29,6 +29,14 @@ type reason =
   (** Conflict (a,b,vpkg) means that the package [a] is in conflict
       with package [b] because of vpkg *)
 
+type node = Cudf.package list
+
+type reducedReason =
+  | RDependency of (node * Cudf_types.vpkg list * node list)
+  | RMissing of (node * Cudf_types.vpkg list)
+  | RConflict of (node * node * Cudf_types.vpkg) 
+
+
 (** The request provided to the solver *)
 type request =
   |Package of Cudf.package
@@ -321,7 +329,30 @@ let fprintf_human ?(pp=default_pp) ?(prefix="") fmt = function
   |_ -> ()
 ;;
 
-let fprintf ?(pp=default_pp) ?(failure=false) ?(success=false) ?(explain=false) ?(minimal=false) fmt d = 
+let add_missing rl = function
+  | Dependency (pkg,vpkgs,pkglist) ->
+    let rec aux acc pkglist = function
+      | [] -> acc
+      | (name,cstr)::tl ->
+	if not (List.exists (fun p -> name = (Cudf.lookup_package_property p "package")) pkglist)
+	then aux ((name,cstr)::acc) pkglist tl
+	else aux acc pkglist tl
+    in 
+    let vpkglist = aux [] pkglist vpkgs in
+    if List.length vpkglist > 0 then (Missing (pkg,List.rev vpkglist))::rl
+    else rl
+  | _ -> assert false
+	  
+
+let add_missings rl =
+  let deps = List.filter (function Dependency _ -> true |_ -> false) rl in
+  let rec aux acc = function
+    | [] -> acc
+    | dep::tl -> aux (add_missing acc dep) tl
+  in 
+  aux rl deps
+
+let fprintf ?(pp=default_pp) ?(failure=false) ?(success=false) ?(explain=false) ?(minimal=false) ?(addmiss=false) fmt d = 
   match d with
   |{result = Success f; request = req } when success ->
        Format.fprintf fmt "@[<v 1>-@,";
@@ -347,8 +378,9 @@ let fprintf ?(pp=default_pp) ?(failure=false) ?(success=false) ?(explain=false) 
        Format.fprintf fmt "@[<v>%a@]@," (pp_package ~source:true pp) r;
        Format.fprintf fmt "status: broken@,";
        if explain then begin
+	 let fl = if addmiss then add_missings (f ()) else (f ()) in
          Format.fprintf fmt "@[<v 1>reasons:@,";
-         Format.fprintf fmt "@[<v>%a@]" (print_error pp r) (f ());
+         Format.fprintf fmt "@[<v>%a@]" (print_error pp r) fl;
          Format.fprintf fmt "@]"
        end;
        Format.fprintf fmt "@]@,"
@@ -378,6 +410,7 @@ let collect results d =
   match d with 
   |{result = Failure (f) ; request = Package r } -> 
       List.iter (fun reason ->
+
         match reason with
         |Conflict (i,j,_) ->
             add results.summary reason r;
@@ -440,3 +473,17 @@ let pp_summary ?(pp=default_pp) ?(explain=false) () fmt result =
   pp_list (pp_summary_row explain pp) fmt l;
   Format.fprintf fmt "@]"
 ;;
+
+
+let to_reduced_reason = function
+  | Dependency (p,vpkgs,pkgs) ->
+    RDependency ([p], vpkgs, List.map (fun x -> [x]) pkgs)
+  | Missing (p,vpkgs) ->
+    RMissing ([p],vpkgs)
+  | Conflict (p1,p2,vpkg) ->
+    RConflict ([p1],[p2],vpkg)
+
+let to_reduced_reasons = List.map to_reduced_reason
+
+
+

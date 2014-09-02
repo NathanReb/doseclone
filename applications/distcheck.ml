@@ -40,13 +40,23 @@ module Options = struct
   add options ~long_name:"coinst" ~help:"Check if these packages are coinstallable" coinst;;
 
   let realversionfield = StdOpt.str_option ();;
-  add options ~long_name:"real-version-field" ~help:"Specify field where the original version of a package is stored in the CUDF file" realversionfield;;
+  add options ~long_name:"real-version-field" ~help:"Specify field
+  where the original version of a package is stored in the CUDF file"
+  realversionfield;;
+
+  let brute_opt = StdOpt.store_true ();;
+  add options ~long_name:"brute" brute_opt;;
+
+  let add_missings_opt = StdOpt.store_true ();;
+  add options ~long_name:"add_miss" add_missings_opt;;
 
 end
 
 include Util.Logging(struct let label = __FILE__ end) ;;
 
 let timer = Util.Timer.create "Solver" 
+
+open Diagnostic
 
 (* implicit prefix of resources derived from name of executable *)
 (* (input_format * add_format ?) *)
@@ -59,6 +69,82 @@ let guess_format t l =
       (Url.scheme_of_string (OptParse.Opt.get t),true)
   |_ -> (Input.guess_format [l], false)
 ;;
+
+let string_of_op = function
+  | `Eq -> "="
+  | `Neq -> "!="
+  | `Geq -> ">="
+  | `Gt -> ">"
+  | `Leq -> "<="
+  | `Lt -> "<"
+
+let string_of_list str_of l =
+  let size = List.length l in
+  let b = Buffer.create (size * 8) in
+  let rec aux buff = function
+    | [el] -> 
+      Buffer.add_string buff (str_of el);
+      Buffer.add_string buff "]";
+      Buffer.contents buff
+    | hd::tl -> 
+      Buffer.add_string buff (str_of hd);
+      Buffer.add_string buff "; ";
+      aux buff tl
+    | [] -> ""
+  in 
+  Buffer.add_string b "[";
+  aux b l
+
+let string_of_vpkg = function
+  | (n, None) -> n
+  | (n, Some (op,v)) -> let sop = (string_of_op op) in
+			Printf.sprintf "%s (%s %d)" n sop v
+
+let string_of_pkg pkg =
+  let n = Cudf.lookup_package_property pkg "package" in
+  let v = Cudf.lookup_package_property pkg "version" in
+  Printf.sprintf "(%s, %s)" n v
+
+
+let brute_print_conflict c = 
+  match c with
+  | (p1,p2,vpkg) -> 
+    let p1str = string_of_pkg p1 in
+    let p2str = string_of_pkg p2 in
+    let vpkgstr = string_of_vpkg vpkg in
+    Printf.printf "Conflict : (%s, %s : %s)\n\n" p1str p2str vpkgstr
+
+let brute_print_missing m =
+  match m with
+  | (pkg, vpkgl) -> let pkgstr = string_of_pkg pkg in
+		    let vpkglstr = string_of_list (string_of_vpkg) vpkgl in
+		    Printf.printf "Missing : (%s, %s)  \n\n" pkgstr vpkglstr
+
+let brute_print_dependency d =
+  match d with
+  | (pkg, vpkgl, pkgl) -> let pkgstr = string_of_pkg pkg in
+			  let vpkglstr = string_of_list (string_of_vpkg) vpkgl in
+			  let pkglstr = string_of_list (string_of_pkg) pkgl in
+			  Printf.printf "Dep : (%s, %s, %s)\n\n" pkgstr vpkglstr pkglstr
+
+let brute_print_r = function
+  | Diagnostic.Missing m -> brute_print_missing m
+  | Diagnostic.Conflict c -> brute_print_conflict c
+  | Diagnostic.Dependency d -> brute_print_dependency d
+ 
+let rec brute_print_reasons = function
+  | r::rl -> brute_print_r r;
+    brute_print_reasons rl
+  | [] -> ()
+
+let brute_print add_miss d = 
+  match d with 
+  |{result = Failure f; request = req} ->
+    let diag = f () in
+    if add_miss then brute_print_reasons (List.unique (Diagnostic.add_missings diag))
+    else brute_print_reasons (List.unique diag)
+  | _ -> ()
+
 
 let main () =
   let posargs = OptParse.OptParser.parse_argv Options.options in
@@ -113,41 +199,9 @@ let main () =
   in
 
   let pp =
-  if OptParse.Opt.is_set Options.realversionfield then
-    let rvtbl = Hashtbl.create (universe_size * 4) in
+  (*if OptParse.Opt.is_set Options.realversionfield then
     let rvf = OptParse.Opt.get Options.realversionfield in
-    let rvtbl_store pkg = 
-      Hashtbl.add 
-	rvtbl 
-	((CudfAdd.get_property "package" pkg),
-	 int_of_string (CudfAdd.get_property "version" pkg)) 
-	(CudfAdd.get_property rvf pkg)
-    in 
-    Cudf.iter_packages rvtbl_store universe;
-    let add_unav_packages_from filename = 
-      let ic = open_in filename in
-      try
-	while true do
-	  let line = input_line ic in
-	  try
-	    Scanf.sscanf line "#v2v:%s@:%d=%s"
-	      (fun opam_name cudf_version opam_version ->
-		let cudf_name = CudfAdd.encode opam_name in
-		if not (Hashtbl.mem rvtbl (cudf_name, cudf_version)) then
-		  Hashtbl.add rvtbl (cudf_name, cudf_version) opam_version)
-	  with Scanf.Scan_failure _ | End_of_file -> ()
-	done
-      with End_of_file ->
-	close_in ic
-    in
-    let rec add_unav_packages = function 
-      | [] -> ()
-      | hd::tl -> let (filetype,(_,_,_,_,filename),_) = Input.parse_uri hd in
-		  if filetype = `Cudf then
-		    add_unav_packages_from filename;
-		  add_unav_packages tl
-    in
-    add_unav_packages fg;
+    let rvtbl = VersionTable.make_version_table rvf universe universe_size fg in
     let from_cudf_real (n,v) =
       try
 	let rv = Hashtbl.find rvtbl (n,v) in
@@ -155,7 +209,7 @@ let main () =
       with Not_found -> from_cudf (n,v)
     in 
     CudfAdd.pp from_cudf_real
-  else
+  else *)
     CudfAdd.pp from_cudf
   in
 
@@ -165,6 +219,7 @@ let main () =
   let explain = OptParse.Opt.get Options.explain in
   let minimal = OptParse.Opt.get Options.minimal in
   let summary = OptParse.Opt.get Options.summary in
+  let addmiss = OptParse.Opt.get Options.add_missings_opt in
   let fmt =
     if OptParse.Opt.is_set Options.outfile then
       let oc = open_out (OptParse.Opt.get Options.outfile) in
@@ -182,7 +237,11 @@ let main () =
         fun pkg -> pp ~decode:(fun x -> x) pkg 
       else fun pkg -> pp pkg
     in
-    Diagnostic.fprintf ~pp ~failure ~success ~explain ~minimal fmt d
+    if OptParse.Opt.get Options.brute_opt then 
+      brute_print addmiss d
+    else 
+      Diagnostic.fprintf ~pp ~failure ~success ~explain ~minimal ~addmiss fmt d
+
   in
   Util.Timer.start timer;
 
