@@ -1,0 +1,72 @@
+preamble: 
+
+package: p
+version: 1
+depends: a | b | c | d, e
+
+package: a
+version: 1
+depends: aa | ab | ac
+
+package: a
+version: 2
+depends: aa
+
+package: a
+version: 3
+depends: ac
+
+package: aa
+version: 1
+depends: m
+
+package: ab
+version: 1
+depends: m
+
+package: ac
+version: 1
+depends: m
+
+package: b
+version: 1
+depends: ba, bc
+
+package: b
+version: 2
+depends: ba | bb, bc
+
+package: ba
+version: 1
+conflicts: bc
+
+package: bb
+version: 1
+
+package: bc
+version: 1
+conflicts: bb
+
+package: c
+version: 1
+depends: cdep
+
+package: cdep
+version: 1
+depends: m
+
+package: d
+version: 1
+conflicts: e = 1, e = 3
+
+package: d
+version: 2
+conflicts: e = 1, e = 3
+
+package: e
+version: 1
+
+package: e
+version: 3
+
+request: 

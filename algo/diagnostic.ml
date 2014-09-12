@@ -33,7 +33,9 @@ type node = Cudf.package list
 
 type reducedReason =
   | RDependency of (node * Cudf_types.vpkg list * node list)
-  | RMissing of (node * Cudf_types.vpkg list)
+  | RMissing of (node * Cudf_types.vpkg list * Cudf_types.vpkg list)
+  (** Missing (a,dep,vpkglist) means that the [vpkglist] part of
+      the dependency [dep] of node [a] cannont be satisfied *)
   | RConflict of (node * node * Cudf_types.vpkg) 
 
 
@@ -342,7 +344,7 @@ let add_missing rl = function
     if List.length vpkglist > 0 then (Missing (pkg,List.rev vpkglist))::rl
     else rl
   | _ -> assert false
-	  
+;;	  
 
 let add_missings rl =
   let deps = List.filter (function Dependency _ -> true |_ -> false) rl in
@@ -351,6 +353,7 @@ let add_missings rl =
     | dep::tl -> aux (add_missing acc dep) tl
   in 
   aux rl deps
+;;
 
 let fprintf ?(pp=default_pp) ?(failure=false) ?(success=false) ?(explain=false) ?(minimal=false) ?(addmiss=false) fmt d = 
   match d with
@@ -474,16 +477,262 @@ let pp_summary ?(pp=default_pp) ?(explain=false) () fmt result =
   Format.fprintf fmt "@]"
 ;;
 
+(* ------ Explain.ml ?? -----------*)
 
-let to_reduced_reason = function
+let rmissing = function
+  | Dependency (pkg,vpkgs,pkglist) ->
+    (let rec aux acc pkglist = function
+      | [] -> acc
+      | (name,cstr)::tl ->
+	if not (List.exists (fun p -> name = (Cudf.lookup_package_property p "package")) pkglist)
+	then aux ((name,cstr)::acc) pkglist tl
+	else aux acc pkglist tl
+    in 
+    let vpkglist = aux [] pkglist vpkgs in
+    if List.length vpkglist > 0 then Some (RMissing ([pkg],vpkgs,List.rev vpkglist))
+    else None)
+  | _ -> assert false
+;;
+	  
+
+let rmissings rl =
+  let deps = List.filter (function Dependency _ -> true |_ -> false) rl in
+  let rec aux acc = function
+    | [] -> acc
+    | dep::tl -> match (rmissing dep) with
+                 | Some m -> aux (m::acc) tl
+		 | None -> aux acc tl
+  in 
+  aux [] deps
+;;
+
+
+let reduced_reason = function
   | Dependency (p,vpkgs,pkgs) ->
     RDependency ([p], vpkgs, List.map (fun x -> [x]) pkgs)
   | Missing (p,vpkgs) ->
-    RMissing ([p],vpkgs)
+    RMissing ([p],vpkgs,vpkgs)
   | Conflict (p1,p2,vpkg) ->
     RConflict ([p1],[p2],vpkg)
 
-let to_reduced_reasons = List.map to_reduced_reason
+let reduced_reasons rl = List.map reduced_reason (List.unique rl)
 
+let pkg_cmp pkg1 pkg2 =
+  let n1 = Cudf.lookup_package_property pkg1 "package" in
+  let n2 = Cudf.lookup_package_property pkg2 "package" in
+  let name_cmp = Pervasives.compare n1 n2 in
+  if name_cmp = 0 
+  then 
+    let v1 = Cudf.lookup_package_property pkg1 "version" in
+    let v2 = Cudf.lookup_package_property pkg2 "version" in
+    Pervasives.compare v1 v2
+  else name_cmp
+;;
+
+(** Returns the Node node dependencies, in rrl, under conjunctive normal form
+    and the list of pkg it's in conflict with *)
+let cnfdeps_and_conflicts node rrl = 
+  let (deps,conflicts) =
+  List.fold_left (fun (d,c) rr -> match rr with
+  | RDependency (n,vpkgs,_) when n = node -> (vpkgs::d,c)
+  | RMissing (n,vpkgs,vpkgspart) when (n = node && vpkgs = vpkgspart) -> (vpkgs::d,c)
+  | RConflict (n1,n2,_) -> 
+    if n1 = node 
+    then (d,n2::c)
+    else if n2 = node then (d,n1::c)
+    else (d,c)
+  | _ -> (d,c)
+  ) ([],[]) rrl
+  in
+  (List.map (List.sort ~cmp:(fun (n1,_) (n2,_) -> Pervasives.compare n1 n2)) deps,
+   List.sort ~cmp:pkg_cmp (List.flatten conflicts))
+;;
+
+
+(** Return true if c2 is included in c1, false otherwise *)
+let cstr_include c1 c2 = 
+  match c1,c2 with
+  | None, _ -> true
+  | Some (`Geq, 1), _ -> true
+  | x,y when x = y -> true
+  | Some (`Gt,v), Some (`Gt,w) -> w >= v
+  | Some (`Gt,v), Some (`Geq,w) -> w > v
+  | Some (`Gt,v), Some (`Eq,w) -> w > v
+  | Some (`Gt,v), Some (`Neq,w) -> (v = 1) && (w = 1)
+  | Some (`Geq,v), Some (`Gt,w) -> w >= v - 1
+  | Some (`Geq,v), Some (`Geq,w) -> w >= v
+  | Some (`Geq,v), Some (`Eq,w) -> w >= v
+  | Some (`Geq,v), Some (`Neq,w) -> (v = 2) && (w = 1)
+  | Some (`Lt,v), Some (`Lt,w) -> w <= v
+  | Some (`Lt,v), Some (`Leq,w) -> w < v
+  | Some (`Lt,v), Some (`Eq,w) -> w < v
+  | Some (`Leq,v), Some (`Lt,w) -> w < v + 1
+  | Some (`Leq,v), Some (`Leq,w) -> w <= v
+  | Some (`Leq,v), Some (`Eq,w) -> w <= v
+  | Some (`Neq,v), Some (`Eq,w) -> w <> v
+  | Some (`Neq,v), Some (`Neq,w) -> w = v
+  | Some (`Neq,v), Some (`Lt,w) -> w <= v
+  | Some (`Neq,v), Some (`Leq,w) -> w < v
+  | Some (`Neq,v), Some (`Gt,w) -> w >= v
+  | Some (`Neq,v), Some (`Geq,w) -> w > v
+  | _ -> false
+;;
+
+
+(** Return true if the constraints disjunction l2 is included in l1, false otherwise
+    It assumes that both lists or sorted in alphanumeric order on package name *)
+let or_include l1 l2 = 
+  let rec aux il1 l1 l2 =
+    match l1, l2 with
+    | _, [] -> true
+    | [], _ -> false
+    | (n1,c1)::tl1, (n2,c2)::tl2 -> 
+      (match Pervasives.compare n1 n2 with
+      | 0 -> if cstr_include c1 c2 then aux il1 il1 tl2
+	else aux il1 tl1 l2
+      | x when x < 0 -> aux il1 tl1 l2
+      | _ -> false)
+  in aux l1 l1 l2
+;;
+
+(** Return true if the constraints under conjunctive normal form in l2 are included in l1, false otherwise
+    It assumes that in both lists, every disjunction are sorted in alphanumeric order on package name *)
+let and_include l1 l2 =
+  let rec aux il2 l1 l2 =
+    match l1,l2 with
+    | [],_ -> true
+    | _, [] -> false
+    | dj1::tl1, dj2::tl2 -> if or_include dj1 dj2 then aux il2 tl1 il2
+      else aux il2 l1 tl2
+  in aux l2 l1 l2
+;;
+
+(** rr_mem pkg rr returns true if the package pkg appears in the reducedReason rr *)
+let rr_mem node = function
+  | RDependency (n,_,_) -> n = node
+  | RConflict (n1,n2,_) -> n1 = node or n2 = node
+  | RMissing (n,_,_) -> n = node
+;;
+
+let conflict_mem node = function
+  | RConflict (n1,n2,_) -> n1 = node or n2 = node
+  | _ -> false
+;;
+
+let cone_rules node rrl = 
+  let initial = List.filter (rr_mem node) rrl in
+  let rec aux_node acc node = function
+    | [] -> acc
+    | rr::tl -> if rr_mem node rr && not (List.mem rr acc)
+      then aux_node (rr::acc) node tl
+      else aux_node acc node tl
+  in 
+  let aux_rr acc rr rrl =
+    match rr with
+    | RDependency (_,_,nl) ->
+      List.fold_left (fun acc' n -> aux_node acc' n rrl) acc nl
+    | _ -> acc
+  in
+  let rec aux acc rrl =
+    let to_process = List.hd acc in
+    let next_step =
+      List.fold_left (fun acc rr -> aux_rr acc rr rrl) [] to_process
+    in
+    if next_step = [] then acc else aux (next_step::acc) rrl
+  in
+  List.unique (List.flatten (aux [initial] rrl))
+    
+    
+    
+
+(** Return the reducedReason list rrl without the irrelevant reasons
+    considering the and_context reducedReason list *)
+let remove_irrelevant and_context rrl =
+  let relevant and_context rrl = function
+    | RDependency (_,_,nl) -> 
+      List.exists (fun node -> (List.exists (rr_mem node) rrl)) nl
+    | RConflict (n1,n2,_) -> 
+      List.exists (conflict_mem n1) and_context
+      or
+      List.exists (conflict_mem n2) and_context
+      or
+      (List.exists (function RDependency (_,_,nl) -> List.mem n1 nl | _ -> false) rrl
+       &&
+       List.exists (function RDependency (_,_,nl) -> List.mem n2 nl | _ -> false) rrl)
+    | RMissing (_,c1,c2) when c1 = c2 -> true
+    | _ -> assert false
+  in 
+  let rec aux length and_context rrl =
+    let filtered = List.filter (relevant and_context rrl) rrl in
+    let newlength = List.length filtered in
+    if newlength < length then aux newlength and_context filtered
+    else filtered
+  in
+  aux (List.length rrl) and_context rrl
+;;
+
+
+let simplify dep rrl =
+  match dep with
+  | RDependency (root,cstr,root_nl) ->
+    let size = List.length root_nl in
+    let deps_table = Hashtbl.create size in
+    List.iter (fun n -> Hashtbl.add deps_table n (cnfdeps_and_conflicts n rrl)) root_nl;
+    let rec aux acc not_processed processed current = function
+      | [] -> if processed <> 0 
+	then aux acc [] 0 current not_processed
+	else
+	(match not_processed with
+	| [] -> current::acc
+	| hd::tl -> aux (current::acc) [] 0 (hd,[hd]) tl)
+      | n::tl -> 
+	let (dom,grp) = current in
+	(match (Hashtbl.find deps_table dom),(Hashtbl.find deps_table n) with
+	| ([],conf1),([],conf2) ->
+	  if conf1 = conf2
+	  then aux acc not_processed processed (dom,n::grp) tl
+	  else aux acc (n::not_processed) processed (dom,grp) tl
+	| (deps1,[]),(deps2,[]) ->
+	  if and_include deps1 deps2
+	  then aux acc not_processed (processed + 1) (dom,n::grp) tl
+	  else if and_include deps2 deps1
+	  then aux acc not_processed (processed + 1) (n,n::grp) tl
+	  else aux acc (n::not_processed) processed current tl
+	| _ -> aux acc (n::not_processed) processed current tl
+	)
+	
+    in
+    let delete (dom,grp) rrl = 
+      List.filter 
+	(function RDependency (n,_,_) when n <> dom && List.mem n grp -> false
+	| RConflict (n1,n2,_) when (n1 <> dom && List.mem n1 grp) or (n2 <> dom && List.mem n2 grp) -> false
+	| _ -> true
+	) rrl
+    in
+    let update (dom,grp) rrl =
+      List.map 
+	(function RDependency (n,c,nl) when n = dom -> 
+	  RDependency (List.flatten grp,c,nl)
+	| RMissing (n,c1,c2) when List.mem n grp ->
+	  RMissing (List.flatten grp,c1,c2)
+	| RConflict (n1,n2,c) ->
+	  if  n1 = dom then RConflict (List.flatten grp,n2,c)
+	  else if n2 = dom then RConflict (n1,List.flatten grp,c)
+	  else RConflict (n1,n2,c)
+	| rr -> rr
+	) rrl
+    in
+    let update_root new_nl rrl = 
+      List.map (function RDependency (n,c,_) when n = root && c = cstr -> RDependency (n,c,new_nl) | rr -> rr) rrl
+    in
+    (match root_nl with
+    | [] -> assert false
+    | hd::tl -> 
+      let cpll = aux [] [] 0 (hd,[hd]) tl in
+      let new_nl = List.fold_left (fun acc (_,grp) -> (List.flatten grp)::acc) [] cpll in      
+      List.fold_left (fun acc cpl -> update cpl (delete cpl acc)) (update_root new_nl rrl) cpll
+    )
+  | _ -> assert false
+;;  
 
 

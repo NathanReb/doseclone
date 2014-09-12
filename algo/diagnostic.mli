@@ -26,9 +26,12 @@ type reason =
 
 type node = Cudf.package list
 
+(** Reasons with nodes instead of single packages *)
 type reducedReason =
   | RDependency of (node * Cudf_types.vpkg list * node list)
-  | RMissing of (node * Cudf_types.vpkg list)
+  | RMissing of (node * Cudf_types.vpkg list * Cudf_types.vpkg list)
+  (** Missing (a,dep,vpkglist) means that the [vpkglist] part of
+      the dependency [dep] of node [a] cannont be satisfied *)
   | RConflict of (node * node * Cudf_types.vpkg)
 
 (** The request provided to the solver *)
@@ -138,7 +141,30 @@ val printf :
   ?pp:pp ->
   ?failure:bool -> ?success:bool -> ?explain:bool -> diagnosis -> unit
 
+val rmissing : reason -> reducedReason option
 
-val to_reduced_reason : reason -> reducedReason
+val rmissings : reason list -> reducedReason list
 
-val to_reduced_reasons : reason list -> reducedReason list
+val reduced_reason : reason -> reducedReason
+
+val reduced_reasons : reason list -> reducedReason list
+
+val pkg_cmp : Cudf.package -> Cudf.package -> int
+
+val cnfdeps_and_conflicts : node -> reducedReason list -> Cudf_types.vpkg list list * Cudf.package list
+
+val cstr_include : Cudf_types.constr -> Cudf_types.constr -> bool
+
+val or_include : Cudf_types.vpkg list -> Cudf_types.vpkg list -> bool
+
+val and_include : Cudf_types.vpkg list list -> Cudf_types.vpkg list list -> bool
+
+val rr_mem : node -> reducedReason -> bool
+
+val conflict_mem : node -> reducedReason -> bool
+
+val cone_rules : node -> reducedReason list -> reducedReason list
+
+val remove_irrelevant : reducedReason list -> reducedReason list -> reducedReason list
+
+val simplify : reducedReason -> reducedReason list -> reducedReason list
