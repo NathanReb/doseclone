@@ -212,7 +212,7 @@ let brute_print_cone_rules pkg rrl =
   Printf.printf " -------\n\n"
 
 let string_of_node = string_of_list string_of_pkg
-
+(*
 let simplify_debug dep rrl =
   match dep with
   | RDependency (root,cstr,root_nl) ->
@@ -293,6 +293,8 @@ let simplify_debug dep rrl =
     )
   | _ -> assert false
 ;;  
+*)
+
 
 let test d universe =
   Printf.printf "\n ------ Tests -------\n \n";
@@ -339,12 +341,12 @@ let test d universe =
       in
       (*let smplfd = List.fold_left (fun rr dep -> simplify dep rr) rr root_deps in
       brute_print_rreasons smplfd;*)
-      List.iter (fun root_dep -> 
-	Printf.printf "\nSimplifying : ";
-	brute_print_rr root_dep;
-	let smplfd = simplify root_dep rr in
-	brute_print_rreasons smplfd;
-	Printf.printf "   --------   \n\n") root_deps;
+      (*List.iter (fun root_dep -> *)
+      Printf.printf "\nSimplifying : %s\n\n" (string_of_pkg p);
+      (*brute_print_rr root_dep;*)
+      let smplfd = List.fold_left (fun acc r -> simplify r acc) rr root_deps in
+      brute_print_rreasons smplfd;
+	Printf.printf "   --------   \n\n"(*) root_deps;*)
     | _ -> ();
     Printf.printf "\n -----------------------\n \n"
   | _ ->

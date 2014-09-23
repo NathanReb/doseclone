@@ -671,50 +671,64 @@ let remove_irrelevant and_context rrl =
   aux (List.length rrl) and_context rrl
 ;;
 
+let proper_add elt list =
+  if List.mem elt list then list else elt::list
+;;
 
-let simplify dep rrl =
+let simplify dep rrl = 
   match dep with
   | RDependency (root,cstr,root_nl) ->
     let size = List.length root_nl in
     let deps_table = Hashtbl.create size in
     List.iter (fun n -> Hashtbl.add deps_table n (cnfdeps_and_conflicts n rrl)) root_nl;
-    let rec aux acc not_processed processed current = function
-      | [] -> if processed <> 0 
-	then aux acc [] 0 current not_processed
+    let rec aux acc not_processed domchng current = function
+      | [] -> if domchng
+	then aux acc [] false current not_processed
 	else
 	(match not_processed with
 	| [] -> current::acc
-	| hd::tl -> aux (current::acc) [] 0 (hd,[hd]) tl)
+	| hd::tl -> aux (current::acc) [] false (hd,[hd]) tl)
       | n::tl -> 
 	let (dom,grp) = current in
 	(match (Hashtbl.find deps_table dom),(Hashtbl.find deps_table n) with
 	| ([],conf1),([],conf2) ->
 	  if conf1 = conf2
-	  then aux acc not_processed processed (dom,n::grp) tl
-	  else aux acc (n::not_processed) processed (dom,grp) tl
+	  then aux acc not_processed domchng (dom,n::grp) tl
+	  else aux acc (n::not_processed) domchng (dom,grp) tl
 	| (deps1,[]),(deps2,[]) ->
 	  if and_include deps1 deps2
-	  then aux acc not_processed (processed + 1) (dom,n::grp) tl
+	  then aux acc not_processed domchng (dom,n::grp) tl
 	  else if and_include deps2 deps1
-	  then aux acc not_processed (processed + 1) (n,n::grp) tl
-	  else aux acc (n::not_processed) processed current tl
-	| _ -> aux acc (n::not_processed) processed current tl
+	  then aux acc not_processed true (n,n::grp) tl
+	  else aux acc (n::not_processed) domchng current tl
+	| (deps1,conf1),(deps2,conf2) ->
+	  if conf1 = conf2
+	  then
+	    (if and_include deps1 deps2
+	     then aux acc not_processed domchng (dom,n::grp) tl
+	     else if and_include deps2 deps1
+	     then aux acc not_processed true (n,n::grp) tl
+	     else aux acc (n::not_processed) domchng current tl)
+	  else aux acc (n::not_processed) domchng current tl
 	)
 	
     in
-    let delete (dom,grp) rrl = 
-      List.filter 
-	(function RDependency (n,_,_) when n <> dom && List.mem n grp -> false
-	| RConflict (n1,n2,_) when (n1 <> dom && List.mem n1 grp) or (n2 <> dom && List.mem n2 grp) -> false
+    let delete (dom,grp) rrl =
+      List.filter
+	(fun rr -> match rr with
+	| RDependency (n,c,nl) when n <> dom && (List.mem n grp) -> false
+	| RConflict (n1,n2,c) when (n1 <> dom && List.mem n1 grp) or (n2 <> dom && List.mem n2 grp) -> false
 	| _ -> true
 	) rrl
-    in
+    in 
     let update (dom,grp) rrl =
-      List.map 
-	(function RDependency (n,c,nl) when n = dom -> 
+      List.map
+	(fun rr -> match rr with 
+	| RDependency (n,c,nl) when n = dom -> 
 	  RDependency (List.flatten grp,c,nl)
 	| RMissing (n,c1,c2) when List.mem n grp ->
-	  RMissing (List.flatten grp,c1,c2)
+	  let global_cstrnt = List.find (fun cl -> or_include cl c1) (fst (Hashtbl.find deps_table dom)) in
+	  RMissing (List.flatten grp,global_cstrnt,c2)
 	| RConflict (n1,n2,c) ->
 	  if  n1 = dom then RConflict (List.flatten grp,n2,c)
 	  else if n2 = dom then RConflict (n1,List.flatten grp,c)
@@ -728,11 +742,71 @@ let simplify dep rrl =
     (match root_nl with
     | [] -> assert false
     | hd::tl -> 
-      let cpll = aux [] [] 0 (hd,[hd]) tl in
+      let cpll = aux [] [] false (hd,[hd]) tl in
       let new_nl = List.fold_left (fun acc (_,grp) -> (List.flatten grp)::acc) [] cpll in      
       List.fold_left (fun acc cpl -> update cpl (delete cpl acc)) (update_root new_nl rrl) cpll
     )
   | _ -> assert false
-;;  
+;;
 
+(* 
+let remove_outdated rrl root =
+  let rec aux rrl size =
+    let res = 
+      List.filter
+      (fun rr -> match rr with
+      | RDependency (n,_,_) when n <> root -> 
+	List.exists (function RDependency (_,_,nl) -> List.mem n nl | _ ->  false) rrl
+      | RMissing (n,_,_) -> 
+	List.exists (function RDependency (_,_,nl) -> List.mem n nl | _ -> false) rrl
+      | RConflict (n1,n2,_) ->
+	List.exists (function RDependency (_,_,nl) -> List.mem n1 nl | _ -> false) rrl
+	&&
+	List.exists (function RDependency (_,_,nl) -> List.mem n2 nl | _ -> false) rrl
+      | _ -> true
+      ) rrl
+    in
+    let new_size = List.length res in
+    if new_size = size then res else aux res new_size
+  in
+  aux rrl (List.length rrl)
+;;
+*)
 
+(*
+let build_expl rl pkg =
+  let rrl = reduced_reasons rl in
+  let root = [pkg] in
+  (* création du graphe *)
+  let context dep deplist rrl =
+    List.unique
+      (List.fold_left 
+	 (fun acc d -> 
+	   if d <> dep then
+	     (match d with
+	     | RDependency (_,_,nl) -> 
+	       List.fold_left (fun acc' n -> (cone_rules n rrl)@acc') acc nl
+	     | _ -> assert false)
+	   else acc)
+	 [] deplist)
+  in
+
+  let rec aux res to_process context root rrl =
+    let domain = remove_irrelevant context (cone_rules root) in
+    let root_deps = List.filter (function RDependency (n,_,_) when n = root -> true | _ -> false) domain in
+    if root_deps <> [] then
+      let simplified = List.fold_left (fun acc rr -> simplify rr acc) domain root_deps in
+      let processed_rules = List.filter (rr_mem root) simplified in
+      (* mise à jour du graphes à insérer *)
+      let next_roots = 
+	List.fold_left 
+	  (fun acc rr -> match rr with
+	  | RDepencency (_,_,nl) when n = root -> nl::acc
+	  | _ -> acc)
+	  [] processed_rules
+      in
+      let context_table = Hashtbl.create next_roots.size in
+      
+    else 
+
+*)
