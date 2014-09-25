@@ -258,25 +258,88 @@ module ExplanationGraph = struct
       type t = Pkgs of (int * Cudf.package list) 
 	       | Or of (int * Cudf.package list * int) 
 	       | Missing of (Cudf_types.vpkg list)
-      let compare x y = Pervasives.compare x y (*TODO*)
-      let hash = Hashtbl.hash
-      let equal x y = (compare x y) = 0
+      let compare x y = 
+	match x,y with
+	| Pkgs (id1,_), Pkgs (id2,_) -> Pervasives.compare id1 id2
+	| Or (id1,_,or_id1), Or(id2,_,or_id2) -> Pervasives.compare (id1,or_id1) (id2,or_id2)
+	| Missing c1, Missing c2 -> Pervasives.compare c1 c2 (*TODO*)
+	| _ -> Pervasives.compare x y
+      let hash = function
+	| Pkgs (id,_) -> Hashtbl.hash id
+	| Or (id,_,or_id) -> Hashtbl.hash (id,or_id)
+	| m -> Hashtbl.hash m (*TODO*)
+      let equal x y = 
+	match x,y with
+	| Pkgs (id1,_), Pkgs (id2,_) -> id1 = id2
+	| Or (id1,_,or_id1), Or(id2,_,or_id2) -> id1 = id2 && or_id1 = or_id2
+	| Missing c1, Missing c2 -> c1 = c2
+	| _ -> false
   end
 
   module ExplE = struct
     type t = Depends of Cudf_types.vpkg list | Conflict
     let compare = Pervasives.compare (*TODO*)
-    let hash = Hashtbl.hash
+    let hash = Hashtbl.hash (*TODO*)
     let equal x y = ((compare x y) = 0)
     let default = Conflict
   end
 
   module G = Imperative.Digraph.ConcreteBidirectionalLabeled(ExplV)(ExplE)
+  
+  let string_of_op = function
+    | `Eq -> "="
+    | `Neq -> "!="
+    | `Geq -> ">="
+    | `Gt -> ">"
+    | `Leq -> "<="
+    | `Lt -> "<"
 
-  let add_dep_edge graph src dst cstr =
-    let edge = (src,ExplE.Depends cstr,dst) in
-    G.add_edge_e graph edge
+  let string_of_vpkg = function
+    | (n, None) -> n
+    | (n, Some (op,v)) -> let sop = (string_of_op op) in
+			  Printf.sprintf "%s (%s %d)" n sop v
 
+  let string_of_pkg pkg =
+    let n = Cudf.lookup_package_property pkg "package" in
+    let v = Cudf.lookup_package_property pkg "version" in
+    Printf.sprintf "(%s, %s)" n v
+
+  let string_of_list str_of l =
+    let size = List.length l in
+    let b = Buffer.create (size * 8) in
+    let rec aux buff = function
+      | [el] -> 
+	Buffer.add_string buff (str_of el);
+	Buffer.add_string buff "]";
+	Buffer.contents buff
+      | hd::tl -> 
+	Buffer.add_string buff (str_of hd);
+	Buffer.add_string buff "; ";
+	aux buff tl
+      | [] -> ""
+    in 
+    Buffer.add_string b "[";
+    aux b l
+
+  let string_of_node = string_of_list string_of_pkg
+
+  let string_of_vertex v =
+    match v with
+    | ExplV.Pkgs (i,n) -> Printf.sprintf "Vertex : Pkgs (%d, %s)\n" i (string_of_node n)
+    | ExplV.Or (i,n,or_i) ->  Printf.sprintf "Vertex : Or (%d, %s, %d)\n" i (string_of_node n) or_i
+    | ExplV.Missing c ->  Printf.sprintf "Vertex : Missing %s\n" (string_of_list (string_of_vpkg) c)
+
+  let string_of_label l = 
+    match l with
+    | ExplE.Conflict -> "#"
+    | ExplE.Depends c -> Printf.sprintf "Depends : %s" (string_of_list (string_of_vpkg) c)
+
+  let string_of_edge e =
+    match e with
+    | (src,label,dst) -> Printf.sprintf "Edge : \n\t 
+                                         Source : %s\n\t
+                                         Label : %s\n\t
+                                         Dest : %s\n" (string_of_vertex src) (string_of_label label) (string_of_vertex dst)
 
 end
 
