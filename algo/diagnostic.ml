@@ -515,7 +515,10 @@ let reduced_reason = function
   | Conflict (p1,p2,vpkg) ->
     RConflict ([p1],[p2],vpkg)
 
-let reduced_reasons rl = List.map reduced_reason (List.unique rl)
+let reduced_reasons rl =
+  let partial_missings = rmissings rl in
+  partial_missings@(List.map reduced_reason (List.unique rl))
+
 
 let pkg_cmp pkg1 pkg2 =
   let n1 = Cudf.lookup_package_property pkg1 "package" in
@@ -641,26 +644,28 @@ let cone_rules node rrl =
     if next_step = [] then acc else aux (next_step::acc) rrl
   in
   List.unique (List.flatten (aux [initial] rrl))
+;;    
     
-    
-    
-
 (** Return the reducedReason list rrl without the irrelevant reasons
     considering the and_context reducedReason list *)
-let remove_irrelevant and_context rrl =
+let remove_irrelevant and_context root rrl =
   let relevant and_context rrl = function
     | RDependency (_,_,nl) -> 
-      List.exists (fun node -> (List.exists (rr_mem node) rrl)) nl
+      not (List.exists (fun node -> not (List.exists (rr_mem node) rrl)) nl)
     | RConflict (n1,n2,_) -> 
       List.exists (conflict_mem n1) and_context
       or
       List.exists (conflict_mem n2) and_context
       or
-      (List.exists (function RDependency (_,_,nl) -> List.mem n1 nl | _ -> false) rrl
-       &&
-       List.exists (function RDependency (_,_,nl) -> List.mem n2 nl | _ -> false) rrl)
-    | RMissing (_,c1,c2) when c1 = c2 -> true
-    | _ -> assert false
+      (
+	(List.exists (function RDependency (_,_,nl) -> List.mem n1 nl | _ -> false) rrl or n1 = root)
+	&&
+	(List.exists (function RDependency (_,_,nl) -> List.mem n2 nl | _ -> false) rrl or n2 = root)
+      )
+    | RMissing (n,c1,c2) ->
+      if c1 <> c2
+      then List.exists (function RDependency (n',c',_) -> n' = n && c' = c1 | _ -> false) rrl
+      else List.exists (function RDependency (_,_,nl) -> List.mem n nl | _ -> false) rrl
   in 
   let rec aux length and_context rrl =
     let filtered = List.filter (relevant and_context rrl) rrl in
@@ -749,6 +754,10 @@ let simplify dep rrl =
   | _ -> assert false
 ;;
 
+open Defaultgraphs
+module EG = ExplanationGraph
+
+
 (* 
 let remove_outdated rrl root =
   let rec aux rrl size =
@@ -773,40 +782,136 @@ let remove_outdated rrl root =
 ;;
 *)
 
-(*
+let add_dep_edge graph src dst cstr =
+  let edge = (src,EG.ExplE.Depends cstr,dst) in
+  EG.G.add_edge_e graph edge
+;;
+
+let add_dep graph global_id or_id root_node dep partial_missing =
+  match dep with
+  | RDependency (_,c,nl) ->
+    let disjunction = List.length nl > 1 or partial_missing <> None  in
+    if disjunction
+    then
+      (match root_node with
+      | EG.ExplV.Pkgs (id,n) ->
+	let or_node = EG.ExplV.Or (id,n,or_id) in
+	let (g_id,node_list) =
+	  List.fold_left 
+	    (fun (id,node_l) n -> 
+	      let node = EG.ExplV.Pkgs (id,n) in
+	      add_dep_edge graph or_node node c;
+	      (id + 1, node::node_l)
+	    ) (global_id,[]) nl
+	in
+	(match partial_missing with
+	| None -> ()
+	| Some RMissing (_,c1,c2) ->
+	  let pm_node = EG.ExplV.Missing c2 in
+	  add_dep_edge graph or_node pm_node c1
+	| _ -> assert false
+	);
+	(g_id,or_id + 1,node_list)
+      | _ -> assert false)
+    else
+      let next_node = EG.ExplV.Pkgs (global_id, List.hd nl) in
+      add_dep_edge graph root_node next_node c;
+      (global_id + 1,or_id,[next_node])
+  | _ -> assert false
+;;
+
+let cone_table deplist rrl =
+  let tmp_tbl = Hashtbl.create (List.length deplist) in
+  List.iter
+    (fun d ->
+      (match d with
+      | RDependency (_,_,nl) ->
+	let cone =
+	  List.fold_left
+	    (fun acc' n ->
+	      (cone_rules n rrl)@acc'
+	    ) [] nl
+	in
+	Hashtbl.add tmp_tbl d cone
+      | _ -> assert false)
+    ) deplist;
+  tmp_tbl
+;;
+
+let conj_context cone_tbl context dep deplist =
+  List.unique
+    (List.fold_left 
+       (fun acc d ->
+	 if d <> dep
+	 then (Hashtbl.find cone_tbl d)@acc
+	 else acc
+       ) context deplist)
+;;
+
+let rec build_deps graph cn_tbl global_id context root_node rrl =
+  match root_node with 
+  | EG.ExplV.Pkgs (id,root) ->
+    let domain = remove_irrelevant context root (cone_rules root rrl) in
+    let root_deps = List.filter (function RDependency (n,_,_) when n = root -> true | _ -> false) domain in
+    let root_confs = List.filter (conflict_mem root) domain in
+    (match List.length root_deps with
+    | 0 -> 
+      if root_confs <> [] then (global_id,[root_node])
+      else
+	(match List.hd domain with
+	| RMissing (_,c1,c2) ->
+	  let miss_node = EG.ExplV.Missing c2 in
+	  add_dep_edge graph root_node miss_node c1;
+	  (global_id,[])
+	| _ -> assert false)
+    | dep_nmbr ->
+      let next_context,self_cn = if root_confs <> [] then root_confs@context,[root_node] else context,[] in
+      let cone_tbl = cone_table root_deps domain in
+      let context_tbl = Hashtbl.create (List.length root_deps) in
+      List.iter 
+	(fun d ->
+	  Hashtbl.add context_tbl d (conj_context cone_tbl next_context d root_deps)
+	) root_deps;
+      let (id,_,cn) =
+	List.fold_left
+	  (fun (global_id,or_id,cnl) dep ->
+	    let simplified = simplify dep domain in
+	    let cstr = (match dep with | RDependency (_,c,_) -> c | _ -> assert false) in
+	    let pr = List.find (function RDependency (n,c,_) when n = root && c = cstr -> true | _ -> false) simplified in
+	    let partial_missing =
+	      try
+		Some (List.find (function RMissing (n,c1,c2) when n = root && c1 <> c2 && c1 = cstr -> true | _ -> false) simplified)
+	      with Not_found ->
+		None
+	    in
+	    let (id,or_id',next_roots) = add_dep graph global_id or_id root_node dep partial_missing in
+	    let next_id,cnl' =
+	      List.fold_left 
+		(fun (id',conflicting_node_list) node ->
+		  let cntxt = next_context@(Hashtbl.find context_tbl dep) in 
+		  let (id',cnl) = build_deps graph cn_tbl id' cntxt node simplified in
+		  (id',cnl@conflicting_node_list)
+		) (id,cnl) next_roots
+	    in
+	    (next_id,or_id',cnl'@cnl)
+	  ) (global_id,0,self_cn) root_deps
+      in
+      if dep_nmbr > 1 or self_cn <> [] then Hashtbl.add cn_tbl root_node cn;
+      (id,cn)
+    )
+    | _ -> assert false
+;;  
+
+let build_conflicts graph cn_tbl cnl = () (*TODO*)
+
 let build_expl rl pkg =
   let rrl = reduced_reasons rl in
   let root = [pkg] in
-  (* création du graphe *)
-  let context dep deplist rrl =
-    List.unique
-      (List.fold_left 
-	 (fun acc d -> 
-	   if d <> dep then
-	     (match d with
-	     | RDependency (_,_,nl) -> 
-	       List.fold_left (fun acc' n -> (cone_rules n rrl)@acc') acc nl
-	     | _ -> assert false)
-	   else acc)
-	 [] deplist)
-  in
+  let expl_graph = EG.G.create () in
+  let root_node = EG.ExplV.Pkgs (0,root) in
+  EG.G.add_vertex expl_graph root_node;
+  let conflicting_nodes_table = Hashtbl.create 10 in 
+  ()
 
-  let rec aux res to_process context root rrl =
-    let domain = remove_irrelevant context (cone_rules root) in
-    let root_deps = List.filter (function RDependency (n,_,_) when n = root -> true | _ -> false) domain in
-    if root_deps <> [] then
-      let simplified = List.fold_left (fun acc rr -> simplify rr acc) domain root_deps in
-      let processed_rules = List.filter (rr_mem root) simplified in
-      (* mise à jour du graphes à insérer *)
-      let next_roots = 
-	List.fold_left 
-	  (fun acc rr -> match rr with
-	  | RDepencency (_,_,nl) when n = root -> nl::acc
-	  | _ -> acc)
-	  [] processed_rules
-      in
-      let context_table = Hashtbl.create next_roots.size in
-      
-    else 
 
-*)
+

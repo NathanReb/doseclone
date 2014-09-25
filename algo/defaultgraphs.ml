@@ -203,7 +203,7 @@ module SyntacticDependencyGraph = struct
 
   let depgraphbar = Util.Progress.create "SyntacticDependencyGraph.dependency_graph"
 
-  (** Build the syntactic dependency graph from the give cudf universe *)
+  (** Build the syntactic dependency graph from the given cudf universe *)
   let dependency_graph univ =
     let timer = Util.Timer.create "SyntacticDependencyGraph.dependency_graph" in
     Util.Timer.start timer;
@@ -250,6 +250,36 @@ module SyntacticDependencyGraph = struct
 end
 
 (******************************************************)
+
+
+module ExplanationGraph = struct
+
+  module ExplV = struct
+      type t = Pkgs of (int * Cudf.package list) 
+	       | Or of (int * Cudf.package list * int) 
+	       | Missing of (Cudf_types.vpkg list)
+      let compare x y = Pervasives.compare x y (*TODO*)
+      let hash = Hashtbl.hash
+      let equal x y = (compare x y) = 0
+  end
+
+  module ExplE = struct
+    type t = Depends of Cudf_types.vpkg list | Conflict
+    let compare = Pervasives.compare (*TODO*)
+    let hash = Hashtbl.hash
+    let equal x y = ((compare x y) = 0)
+    let default = Conflict
+  end
+
+  module G = Imperative.Digraph.ConcreteBidirectionalLabeled(ExplV)(ExplE)
+
+  let add_dep_edge graph src dst cstr =
+    let edge = (src,ExplE.Depends cstr,dst) in
+    G.add_edge_e graph edge
+
+
+end
+
 
 (** Imperative bidirectional graph for dependecies. *)
 (** Imperative unidirectional graph for conflicts. *)

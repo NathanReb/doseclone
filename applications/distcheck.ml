@@ -309,15 +309,15 @@ let test d universe =
     (*Printf.printf "\n ______ Cone_rules + remove_irlvnt ______ \n \n";
     Cudf.iter_packages (fun pkg -> brute_print_cone_rules pkg rr ) universe;*)
     (* test avec tricky.cudf seulement *)
-    (*let p = Cudf.lookup_package universe ("p",1) in
+    let p = Cudf.lookup_package universe ("p",1) in
     let b = Cudf.lookup_package universe ("b",1) in
     let a = Cudf.lookup_package universe ("a",1) in
     let cr_p = Diagnostic.cone_rules [p] rr in
     let cr_b = Diagnostic.cone_rules [b] rr in
     let cr_a = Diagnostic.cone_rules [a] rr in
-    let rlvnt_p = Diagnostic.remove_irrelevant [] cr_p in
-    let rlvnt_b = Diagnostic.remove_irrelevant [] cr_b in
-    let rlvnt_a = Diagnostic.remove_irrelevant [] cr_a in
+    let rlvnt_p = Diagnostic.remove_irrelevant [] [p] cr_p in
+    let rlvnt_b = Diagnostic.remove_irrelevant [] [b] cr_b in
+    let rlvnt_a = Diagnostic.remove_irrelevant [] [a] cr_a in
     Printf.printf "Cone p :\n\n";
     brute_print_rreasons cr_p;   
     Printf.printf "Cone a :\n\n";
@@ -329,7 +329,7 @@ let test d universe =
     Printf.printf "Relevant Cone a :\n\n";
     brute_print_rreasons rlvnt_a;
     Printf.printf "Relevant Cone b :\n\n";
-    brute_print_rreasons rlvnt_b;*)  
+    brute_print_rreasons rlvnt_b; 
     (* tricky.cudf only : fin *)
     Printf.printf "\n ________ Simplified _______ \n \n";
     match req with

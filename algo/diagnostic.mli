@@ -165,8 +165,7 @@ val conflict_mem : node -> reducedReason -> bool
 
 val cone_rules : node -> reducedReason list -> reducedReason list
 
-val remove_irrelevant : reducedReason list -> reducedReason list -> reducedReason list
+val remove_irrelevant : reducedReason list -> node -> reducedReason list -> reducedReason list
 
 val simplify : reducedReason -> reducedReason list -> reducedReason list
 
-(*val remove_outdated : reducedReason list -> node -> reducedReason list*)

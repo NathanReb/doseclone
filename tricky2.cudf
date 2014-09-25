@@ -1,0 +1,41 @@
+preamble: 
+
+package: p
+version: 1
+depends: a | b
+
+package: a
+version: 1
+depends: d, i
+
+package: b
+version: 1
+depends: c, d
+
+package: c
+version: 1
+conflicts: e
+
+package: d
+version: 1
+depends: e, f | h | m
+
+package: e
+version: 1
+
+package: f
+version: 1
+depends: g
+
+package: g
+version: 1
+conflicts: i
+
+package: h
+version: 1
+depends: m1
+
+package: i
+version: 1
+
+request: 
