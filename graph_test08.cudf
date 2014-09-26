@@ -1,0 +1,14 @@
+preamble: 
+
+package: p
+version: 1
+depends: a, b
+
+package: a
+version: 1
+conflicts: b
+
+package: b
+version: 1
+
+request: 

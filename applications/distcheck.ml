@@ -194,7 +194,6 @@ let brute_print add_miss d =
     else brute_print_reasons (List.unique diag)
   | _ -> ()
 
-(** ------------------------------------- *)
 
 let brute_print_deps node rrl =
   let pkg = List.hd node in
@@ -212,88 +211,191 @@ let brute_print_cone_rules pkg rrl =
   Printf.printf " -------\n\n"
 
 let string_of_node = string_of_list string_of_pkg
-(*
-let simplify_debug dep rrl =
+
+(** ------------------------------------- *)
+
+(** ------------------------------ *)
+(** ------------------------------ *)
+(** -------- TO REMOVE ----------- *)
+
+open Defaultgraphs
+module EG = ExplanationGraph
+
+let add_dep_edge graph src dst cstr =
+  let edge = (src,EG.ExplE.Depends cstr,dst) in
+  EG.G.add_edge_e graph edge
+;;
+
+let add_dep graph global_id or_id root_node dep partial_missing =
   match dep with
-  | RDependency (root,cstr,root_nl) ->
-    let size = List.length root_nl in
-    let deps_table = Hashtbl.create size in
-    List.iter (fun n -> Hashtbl.add deps_table n (cnfdeps_and_conflicts n rrl)) root_nl;
-    let rec aux acc not_processed processed current = function
-      | [] -> if processed <> 0 
-	then aux acc [] 0 current not_processed
-	else
-	(match not_processed with
-	| [] -> current::acc
-	| hd::tl -> aux (current::acc) [] 0 (hd,[hd]) tl)
-      | n::tl -> 
-	let (dom,grp) = current in
-	(match (Hashtbl.find deps_table dom),(Hashtbl.find deps_table n) with
-	| ([],conf1),([],conf2) ->
-	  if conf1 = conf2
-	  then aux acc not_processed processed (dom,n::grp) tl
-	  else aux acc (n::not_processed) processed (dom,grp) tl
-	| (deps1,[]),(deps2,[]) ->
-	  if and_include deps1 deps2
-	  then aux acc not_processed (processed + 1) (dom,n::grp) tl
-	  else if and_include deps2 deps1
-	  then aux acc not_processed (processed + 1) (n,n::grp) tl
-	  else aux acc (n::not_processed) processed current tl
-	| (a1,b1),(a2,b2) ->
-	  (*Printf.printf "Debug : assertion failed :\n";
-	  let depstr1 = string_of_list (string_of_list (string_of_vpkg)) a1 in
-	  let confstr1 = string_of_list (string_of_pkg) b1 in
-	  Printf.printf "Debug : Deps1 : %s \n" depstr1;
-	  Printf.printf "Debug : Confs1 : %s \n" confstr1;
-	  let depstr2 = string_of_list (string_of_list (string_of_vpkg)) a2 in
-	  let confstr2 = string_of_list (string_of_pkg) b2 in
-	  Printf.printf "Debug : Deps2 : %s \n" depstr2;
-	  Printf.printf "Debug : Confs2 : %s \n" confstr2;
-	  Printf.printf "Debug : assertion failed end\n";*)
-	  aux acc (n::not_processed) processed current tl
-	)
-	
-    in
-    let delete (dom,grp) rrl = 
-      List.filter 
-	(function RDependency (n,_,_) when n <> dom && List.mem n grp -> false
-	| RConflict (n1,n2,_) when (n1 <> dom && List.mem n1 grp) or (n2 <> dom && List.mem n2 grp) -> false
-	| _ -> true
-	) rrl
-    in
-    let update (dom,grp) rrl =
-      List.map 
-	(function RDependency (n,c,nl) when n = dom -> 
-	  RDependency (List.flatten grp,c,nl)
-	| RMissing (n,c1,c2) when List.mem n grp ->
-	  RMissing (List.flatten grp,c1,c2)
-	| RConflict (n1,n2,c) ->
-	  if List.mem n1 grp then RConflict (List.flatten grp,n2,c)
-	  else if List.mem n2 grp then RConflict (n1,List.flatten grp,c)
-	  else RConflict (n1,n2,c)
-	| rr -> rr
-	) rrl
-    in
-    let update_root new_nl rrl = 
-      List.map (function RDependency (n,c,_) when n = root && c = cstr -> RDependency (n,c,new_nl) | rr -> rr) rrl
-    in
-    (match root_nl with
-    | [] -> assert false
-    | hd::tl -> 
-      let cpll = aux [] [] 0 (hd,[hd]) tl in
-      (*Printf.printf "Debug : cpll :\n";
-      List.iter (fun (dom,grp) -> 
-	let domstr = string_of_node dom in
-	let grpstr = string_of_node (List.flatten grp) in
-	Printf.printf "Debug : (%s , %s)\n" domstr grpstr
-      ) cpll;
-      Printf.printf "Debug : cpll end\n";*)
-      let new_nl = List.fold_left (fun acc (_,grp) -> (List.flatten grp)::acc) [] cpll in      
-      List.fold_left (fun acc cpl -> update cpl (delete cpl acc)) (update_root new_nl rrl) cpll
-    )
+  | RDependency (_,c,nl) ->
+    let disjunction = List.length nl > 1 or partial_missing <> None  in
+    if disjunction
+    then
+      (match root_node with
+      | EG.ExplV.Pkgs (id,n) ->
+	let or_node = EG.ExplV.Or (id,n,or_id) in
+	add_dep_edge graph root_node or_node c;
+	let (g_id,node_list) =
+	  List.fold_left 
+	    (fun (id,node_l) n -> 
+	      let node = EG.ExplV.Pkgs (id,n) in
+	      add_dep_edge graph or_node node c;
+	      (id + 1, node::node_l)
+	    ) (global_id,[]) nl
+	in
+	(match partial_missing with
+	| None -> ()
+	| Some RMissing (_,c1,c2) ->
+	  let pm_node = EG.ExplV.Missing c2 in
+	  add_dep_edge graph or_node pm_node c1
+	| _ -> assert false
+	);
+	(g_id,or_id + 1,node_list)
+      | _ -> assert false)
+    else
+      let next_node = EG.ExplV.Pkgs (global_id, List.hd nl) in
+      add_dep_edge graph root_node next_node c;
+      (global_id + 1,or_id,[next_node])
   | _ -> assert false
-;;  
-*)
+;;
+
+let cone_table deplist rrl =
+  let tmp_tbl = Hashtbl.create (List.length deplist) in
+  List.iter
+    (fun d ->
+      (match d with
+      | RDependency (_,_,nl) ->
+	let cone =
+	  List.fold_left
+	    (fun acc' n ->
+	      (cone_rules n rrl)@acc'
+	    ) [] nl
+	in
+	Hashtbl.add tmp_tbl d cone
+      | _ -> assert false)
+    ) deplist;
+  tmp_tbl
+;;
+
+let conj_context cone_tbl context dep deplist =
+  List.unique
+    (List.fold_left 
+       (fun acc d ->
+	 if d <> dep
+	 then (Hashtbl.find cone_tbl d)@acc
+	 else acc
+       ) context deplist)
+;;
+
+let rec build_deps graph cn_tbl global_id context root_node rrl =
+  match root_node with 
+  | EG.ExplV.Pkgs (id,root) ->
+    let domain = remove_irrelevant context root (cone_rules root rrl) in
+    let root_deps = List.filter (function RDependency (n,_,_) when n = root -> true | _ -> false) domain in
+    let root_confs = List.filter (conflict_mem root) domain in
+    let debug = 
+      Printf.printf "DEBUG 00 : processing %s\n" (EG.string_of_vertex root_node);
+      Printf.printf "DEBUG 01 : rrl : \n";
+      brute_print_rreasons rrl;
+      Printf.printf "DEBUG 02 : domain :\n";
+      brute_print_rreasons domain;
+      Printf.printf "DEBUG 03 : root_deps :\n";
+      brute_print_rreasons root_deps;
+      Printf.printf "DEBUG 04 : root_confs :\n";
+      brute_print_rreasons root_confs;
+    in
+    (match List.length root_deps with
+    | 0 -> 
+      if root_confs <> [] 
+      then 
+	let debug = 
+	  Printf.printf "DEBUG 05 : conflict leaf : %s\n" (EG.string_of_vertex root_node)
+	in
+	(global_id,[root_node])
+      else
+	let debug = 
+	  Printf.printf "DEBUG 05 : missing leaf\n\n ";
+	in
+	(match List.hd domain with
+	| RMissing (_,c1,c2) ->
+	  let miss_node = EG.ExplV.Missing c2 in
+	  add_dep_edge graph root_node miss_node c1;
+	  (global_id,[])
+	| _ -> assert false)
+    | dep_nmbr ->
+      let next_context,self_cn = if root_confs <> [] then root_confs@context,[root_node] else context,[] in
+      let debug =
+	Printf.printf "DEBUG 05 : next_context :\n";
+	brute_print_rreasons next_context;
+	Printf.printf "DEBUG 06 : self_cn : ";
+	Printf.printf "%s \n" (EG.string_of_list (EG.string_of_vertex) self_cn)
+      in
+      let cone_tbl = cone_table root_deps domain in
+      let context_tbl = Hashtbl.create (List.length root_deps) in
+      List.iter 
+	(fun d ->
+	  Hashtbl.add context_tbl d (conj_context cone_tbl next_context d root_deps)
+	) root_deps;
+      let (id,_,cn) =
+	List.fold_left
+	  (fun (global_id,or_id,cnl) dep ->
+	    let simplified = simplify dep domain in
+	    let cstr = (match dep with | RDependency (_,c,_) -> c | _ -> assert false) in
+	    let pr = List.find (function RDependency (n,c,_) when n = root && c = cstr -> true | _ -> false) simplified in
+	    let debug =
+	      Printf.printf "DEBUG 07 : simplified : \n";
+	      brute_print_rreasons simplified;
+	      Printf.printf "DEBUG 08 : pr : ";
+	      brute_print_rr pr
+	    in
+	    let partial_missing =
+	      try
+		Some (List.find (function RMissing (n,c1,c2) when n = root && c1 <> c2 && c1 = cstr -> true | _ -> false) simplified)
+	      with Not_found ->
+		None
+	    in
+	    let (id,or_id',next_roots) = add_dep graph global_id or_id root_node pr partial_missing in
+	    let debug =
+	      Printf.printf "DEBUG 09 : next_roots :\n";
+	      Printf.printf "%s \n" (EG.string_of_list (EG.string_of_vertex) next_roots)
+	    in
+	    let next_id,cnl' =
+	      List.fold_left 
+		(fun (id',conflicting_node_list) node ->
+		  let cntxt = next_context@(Hashtbl.find context_tbl dep) in 
+		  let (id',cnl) = build_deps graph cn_tbl id' cntxt node simplified in
+		  let debug =
+		    Printf.printf "DEBUG 10 : new conflicting vertex list :\n";
+		    Printf.printf "%s \n\n" (EG.string_of_list (EG.string_of_vertex) (cnl@conflicting_node_list))
+		  in
+		  (id',cnl@conflicting_node_list)
+		) (id,[]) next_roots
+	    in
+	    (next_id,or_id',cnl'@cnl)
+	  ) (global_id,0,self_cn) root_deps
+      in
+      if dep_nmbr > 1 or self_cn <> [] then Hashtbl.add cn_tbl root_node cn;
+      (id,cn)
+    )
+    | _ -> assert false
+;; 
+
+
+let build_expl rl pkg =
+  let rrl = reduced_reasons rl in
+  let root = [pkg] in
+  let expl_graph = EG.G.create () in
+  let root_node = EG.ExplV.Pkgs (0,root) in
+  EG.G.add_vertex expl_graph root_node;
+  let conflicting_nodes_table = Hashtbl.create 10 in 
+  let cnl = build_deps expl_graph conflicting_nodes_table 1 [] root_node rrl in
+  (expl_graph,conflicting_nodes_table,cnl)
+;;
+
+(** -------- TO REMOVE ----------- *)
+(** ------------------------------ *)
+(** ------------------------------ *)
 
 
 let test d universe =
@@ -309,7 +411,7 @@ let test d universe =
     (*Printf.printf "\n ______ Cone_rules + remove_irlvnt ______ \n \n";
     Cudf.iter_packages (fun pkg -> brute_print_cone_rules pkg rr ) universe;*)
     (* test avec tricky.cudf seulement *)
-    let p = Cudf.lookup_package universe ("p",1) in
+    (*let p = Cudf.lookup_package universe ("p",1) in
     let b = Cudf.lookup_package universe ("b",1) in
     let a = Cudf.lookup_package universe ("a",1) in
     let cr_p = Diagnostic.cone_rules [p] rr in
@@ -330,11 +432,11 @@ let test d universe =
     brute_print_rreasons rlvnt_a;
     Printf.printf "Relevant Cone b :\n\n";
     brute_print_rreasons rlvnt_b; 
-    (* tricky.cudf only : fin *)
-    Printf.printf "\n ________ Simplified _______ \n \n";
+    (* tricky.cudf only : fin *)*)
+    (*Printf.printf "\n ________ Simplified _______ \n \n";*)
     match req with
     | Package p ->
-      let root_deps = 
+      (*let root_deps = 
 	List.filter 
 	  (function RDependency (n,_,_) when n = [p] -> true | _ -> false
 	  ) rr
@@ -346,7 +448,18 @@ let test d universe =
       (*brute_print_rr root_dep;*)
       let smplfd = List.fold_left (fun acc r -> simplify r acc) rr root_deps in
       brute_print_rreasons smplfd;
-	Printf.printf "   --------   \n\n"(*) root_deps;*)
+      Printf.printf "   --------   \n\n";*)
+      let (g,cn_tbl,cnl) = (build_expl diag p) in
+      EG.print_egraph g;
+      Printf.printf "\nConflicting Nodes Table :\n\n"; 
+      Hashtbl.iter 
+	(fun v vl ->
+	  Printf.printf "%s <-------- \n\n" (EG.string_of_vertex v);
+	  Printf.printf "%s \n\n" (EG.string_of_list (EG.string_of_vertex) vl);
+	  Printf.printf "\t --------> \n\n"
+	) cn_tbl;
+      ();
+	
     | _ -> ();
     Printf.printf "\n -----------------------\n \n"
   | _ ->

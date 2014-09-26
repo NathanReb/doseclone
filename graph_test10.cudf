@@ -1,0 +1,30 @@
+preamble: 
+
+package: p
+version: 1
+depends: a, b, c
+
+package: a
+version: 1
+depends: c1 | c2
+
+package: b
+version: 1
+depends: c1 | c3
+
+package: c
+version: 1
+depends: c2 | c3
+
+package: c1
+version: 1
+conflicts: c2, c3
+
+package: c2
+version: 1
+conflicts: c3
+
+package: c3
+version: 1 
+
+request: 

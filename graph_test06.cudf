@@ -1,0 +1,15 @@
+preamble: 
+
+package: p
+version: 1
+depends: a | b | c | d
+
+package: a
+version: 1
+depends: ma
+
+package: b
+version: 1
+depends: mb
+
+request: 

@@ -13,6 +13,8 @@
 module OcamlHash = Hashtbl
 open ExtLib
 open Common
+open Defaultgraphs
+module EG = ExplanationGraph
 
 include Util.Logging(struct let label = __FILE__ end) ;;
 
@@ -665,7 +667,10 @@ let remove_irrelevant and_context root rrl =
     | RMissing (n,c1,c2) ->
       if c1 <> c2
       then List.exists (function RDependency (n',c',_) -> n' = n && c' = c1 | _ -> false) rrl
-      else List.exists (function RDependency (_,_,nl) -> List.mem n nl | _ -> false) rrl
+      else 
+	List.exists (function RDependency (_,_,nl) -> List.mem n nl | _ -> false) rrl
+	or
+	n = root
   in 
   let rec aux length and_context rrl =
     let filtered = List.filter (relevant and_context rrl) rrl in
@@ -748,14 +753,13 @@ let simplify dep rrl =
     | [] -> assert false
     | hd::tl -> 
       let cpll = aux [] [] false (hd,[hd]) tl in
-      let new_nl = List.fold_left (fun acc (_,grp) -> (List.flatten grp)::acc) [] cpll in      
-      List.fold_left (fun acc cpl -> update cpl (delete cpl acc)) (update_root new_nl rrl) cpll
+      let new_nl = List.fold_left (fun acc (_,grp) -> (List.flatten grp)::acc) [] cpll in
+      List.unique (
+	List.fold_left (fun acc cpl -> update cpl (delete cpl acc)) (update_root new_nl rrl) cpll)
     )
   | _ -> assert false
 ;;
 
-open Defaultgraphs
-module EG = ExplanationGraph
 
 
 (* 
@@ -796,6 +800,7 @@ let add_dep graph global_id or_id root_node dep partial_missing =
       (match root_node with
       | EG.ExplV.Pkgs (id,n) ->
 	let or_node = EG.ExplV.Or (id,n,or_id) in
+	add_dep_edge graph root_node or_node c;
 	let (g_id,node_list) =
 	  List.fold_left 
 	    (fun (id,node_l) n -> 
@@ -884,14 +889,14 @@ let rec build_deps graph cn_tbl global_id context root_node rrl =
 	      with Not_found ->
 		None
 	    in
-	    let (id,or_id',next_roots) = add_dep graph global_id or_id root_node dep partial_missing in
+	    let (id,or_id',next_roots) = add_dep graph global_id or_id root_node pr partial_missing in
 	    let next_id,cnl' =
 	      List.fold_left 
 		(fun (id',conflicting_node_list) node ->
 		  let cntxt = next_context@(Hashtbl.find context_tbl dep) in 
 		  let (id',cnl) = build_deps graph cn_tbl id' cntxt node simplified in
 		  (id',cnl@conflicting_node_list)
-		) (id,cnl) next_roots
+		) (id,[]) next_roots
 	    in
 	    (next_id,or_id',cnl'@cnl)
 	  ) (global_id,0,self_cn) root_deps
@@ -902,7 +907,6 @@ let rec build_deps graph cn_tbl global_id context root_node rrl =
     | _ -> assert false
 ;;  
 
-let build_conflicts graph cn_tbl cnl = () (*TODO*)
 
 let build_expl rl pkg =
   let rrl = reduced_reasons rl in
@@ -911,7 +915,8 @@ let build_expl rl pkg =
   let root_node = EG.ExplV.Pkgs (0,root) in
   EG.G.add_vertex expl_graph root_node;
   let conflicting_nodes_table = Hashtbl.create 10 in 
-  ()
-
+  let cnl = build_deps expl_graph conflicting_nodes_table 1 [] root_node rrl in
+  (expl_graph,conflicting_nodes_table,cnl)
+;;
 
 

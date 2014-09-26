@@ -1,0 +1,32 @@
+preamble: 
+
+package: p
+version: 1
+depends: a | b | c
+
+package: a
+version: 1
+depends: aa
+
+package: b
+version: 1
+depends: bb
+
+package: c
+version: 1
+depends: cc
+
+package: aa
+version: 1
+depends: m
+
+package: bb
+version: 1
+depends: m
+
+package: cc
+version: 1
+depends: m
+
+
+request: 

@@ -336,10 +336,18 @@ module ExplanationGraph = struct
 
   let string_of_edge e =
     match e with
-    | (src,label,dst) -> Printf.sprintf "Edge : \n\t 
-                                         Source : %s\n\t
-                                         Label : %s\n\t
-                                         Dest : %s\n" (string_of_vertex src) (string_of_label label) (string_of_vertex dst)
+    | (src,label,dst) -> Printf.sprintf "Edge : \n\tSource : %s\tLabel : %s\n\tDest : %s\n" (string_of_vertex src) (string_of_label label) (string_of_vertex dst)
+
+  let print_egraph g =
+    Printf.printf "Graph : \n\n";
+    G.iter_vertex 
+      (fun v ->
+	Printf.printf "%s \n" (string_of_vertex v)
+      )	g;
+    G.iter_edges_e
+      (fun e ->
+	Printf.printf "%s \n" (string_of_edge e)
+      ) g
 
 end
 
