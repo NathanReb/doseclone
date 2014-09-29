@@ -1,0 +1,6 @@
+- add graph reading functions in diagnostic.ml
+- add dotprinter for explgraph
+- add a build_co_expl function for coinstallability requests
+- modify the conflict edges and the way they're built so they contain the unsat-conflict constraint
+- add tests (both OUnit and in dose-list)
+- improve the compare/equal/hash functions for ExplV and ExplE
