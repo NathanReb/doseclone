@@ -14,7 +14,6 @@ module OcamlHash = Hashtbl
 open ExtLib
 open Common
 open Defaultgraphs
-module EG = ExplanationGraph
 
 include Util.Logging(struct let label = __FILE__ end) ;;
 
@@ -787,8 +786,8 @@ let remove_outdated rrl root =
 *)
 
 let add_dep_edge graph src dst cstr =
-  let edge = (src,EG.ExplE.Depends cstr,dst) in
-  EG.G.add_edge_e graph edge
+  let edge = (src,ExplanationGraph.ExplE.Depends cstr,dst) in
+  ExplanationGraph.G.add_edge_e graph edge
 ;;
 
 let add_dep graph global_id or_id root_node dep partial_missing =
@@ -798,13 +797,13 @@ let add_dep graph global_id or_id root_node dep partial_missing =
     if disjunction
     then
       (match root_node with
-      | EG.ExplV.Pkgs (id,n) ->
-	let or_node = EG.ExplV.Or (id,n,or_id) in
+      | ExplanationGraph.ExplV.Pkgs (id,n) ->
+	let or_node = ExplanationGraph.ExplV.Or (id,n,or_id) in
 	add_dep_edge graph root_node or_node c;
 	let (g_id,node_list) =
 	  List.fold_left 
 	    (fun (id,node_l) n -> 
-	      let node = EG.ExplV.Pkgs (id,n) in
+	      let node = ExplanationGraph.ExplV.Pkgs (id,n) in
 	      add_dep_edge graph or_node node c;
 	      (id + 1, node::node_l)
 	    ) (global_id,[]) nl
@@ -812,14 +811,14 @@ let add_dep graph global_id or_id root_node dep partial_missing =
 	(match partial_missing with
 	| None -> ()
 	| Some RMissing (_,c1,c2) ->
-	  let pm_node = EG.ExplV.Missing c2 in
+	  let pm_node = ExplanationGraph.ExplV.Missing c2 in
 	  add_dep_edge graph or_node pm_node c1
 	| _ -> assert false
 	);
 	(g_id,or_id + 1,node_list)
       | _ -> assert false)
     else
-      let next_node = EG.ExplV.Pkgs (global_id, List.hd nl) in
+      let next_node = ExplanationGraph.ExplV.Pkgs (global_id, List.hd nl) in
       add_dep_edge graph root_node next_node c;
       (global_id + 1,or_id,[next_node])
   | _ -> assert false
@@ -855,7 +854,7 @@ let conj_context cone_tbl context dep deplist =
 
 let rec build_deps graph cn_tbl global_id context root_node rrl =
   match root_node with 
-  | EG.ExplV.Pkgs (id,root) ->
+  | ExplanationGraph.ExplV.Pkgs (id,root) ->
     let domain = remove_irrelevant context root (cone_rules root rrl) in
     let root_deps = List.filter (function RDependency (n,_,_) when n = root -> true | _ -> false) domain in
     let root_confs = List.filter (conflict_mem root) domain in
@@ -865,7 +864,7 @@ let rec build_deps graph cn_tbl global_id context root_node rrl =
       else
 	(match List.hd domain with
 	| RMissing (_,c1,c2) ->
-	  let miss_node = EG.ExplV.Missing c2 in
+	  let miss_node = ExplanationGraph.ExplV.Missing c2 in
 	  add_dep_edge graph root_node miss_node c1;
 	  (global_id,[])
 	| _ -> assert false)
@@ -907,16 +906,84 @@ let rec build_deps graph cn_tbl global_id context root_node rrl =
     | _ -> assert false
 ;;  
 
+let add_conflict_edge graph src dst =
+  let edge = (src,ExplanationGraph.ExplE.Conflict,dst) in
+  if not (ExplanationGraph.G.mem_edge_e graph (dst,ExplanationGraph.ExplE.Conflict,src))
+  then ExplanationGraph.G.add_edge_e graph edge
+  else ()
+;;
+
+
+let father graph vertex = 
+  let el = ExplanationGraph.G.pred_e graph vertex in
+  let vl = List.fold_left 
+    (fun acc (src,label,_) -> 
+      (match label with
+      | ExplanationGraph.ExplE.Conflict -> acc
+      | _ -> src::acc
+      )
+    ) [] el 
+  in
+  List.hd vl
+;;
+
+let rec conflict_partners graph cn_tbl vertex = 
+  try 
+    Hashtbl.find cn_tbl vertex
+  with Not_found ->
+    conflict_partners graph cn_tbl (father graph vertex)
+;;
+
+let rec add_conflict graph src partner = function
+  | pkg::tl ->
+    (match partner with
+    | ExplanationGraph.ExplV.Pkgs (_,pl) ->
+      if (List.mem pkg pl) or (List.mem pkg pl)
+      then add_conflict_edge graph src partner	
+      else add_conflict graph src partner tl
+    | _ -> assert false)
+  | [] -> ()
+  | _ -> assert false
+;;
+
+let build_conf graph cn_tbl cnl cl =
+  List.iter
+    (fun vertex ->
+      (match vertex with
+      | ExplanationGraph.ExplV.Pkgs (_,pl) ->
+	let conflicts = 
+	  List.fold_left
+	    (fun acc r -> match r with 
+	    | Conflict (p1,p2,_) -> 
+	      if (List.mem p1 pl)
+	      then p2::acc
+	      else if (List.mem p2 pl)
+	      then p1::acc
+	      else acc
+	    | _ -> acc
+	    ) [] cl
+	in 
+	let partners = List.filter (fun v -> v <> vertex) (conflict_partners graph cn_tbl vertex) in
+	List.iter
+	  (fun prtnr ->
+	    add_conflict graph vertex prtnr conflicts
+	  ) partners
+      | _ -> assert false)
+    ) cnl
+;;
+  
 
 let build_expl rl pkg =
   let rrl = reduced_reasons rl in
   let root = [pkg] in
-  let expl_graph = EG.G.create () in
-  let root_node = EG.ExplV.Pkgs (0,root) in
-  EG.G.add_vertex expl_graph root_node;
+  let expl_graph = ExplanationGraph.G.create () in
+  let root_node = ExplanationGraph.ExplV.Pkgs (0,root) in
+  ExplanationGraph.G.add_vertex expl_graph root_node;
   let conflicting_nodes_table = Hashtbl.create 10 in 
-  let cnl = build_deps expl_graph conflicting_nodes_table 1 [] root_node rrl in
-  (expl_graph,conflicting_nodes_table,cnl)
+  let cnl = snd (build_deps expl_graph conflicting_nodes_table 1 [] root_node rrl) in
+  let cl = List.filter (function Conflict _ -> true | _ -> false) rl in
+  build_conf expl_graph conflicting_nodes_table cnl cl;
+  expl_graph
 ;;
 
 

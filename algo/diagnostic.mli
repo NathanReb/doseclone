@@ -10,6 +10,7 @@
 (*  library, see the COPYING file for more information.                               *)
 (**************************************************************************************)
 
+open Defaultgraphs
 
 (** One un-installability reason for a package *)
 type reason =
@@ -169,3 +170,6 @@ val remove_irrelevant : reducedReason list -> node -> reducedReason list -> redu
 
 val simplify : reducedReason -> reducedReason list -> reducedReason list
 
+val add_conflict : ExplanationGraph.G.t -> ExplanationGraph.ExplV.t -> ExplanationGraph.ExplV.t -> Cudf.package list -> unit
+
+val build_expl : reason list -> Cudf.package -> ExplanationGraph.G.t
